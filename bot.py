@@ -39,7 +39,7 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name="your study progress 📚"
+            name="Your study progress 📚"
         )
     )
 
@@ -81,7 +81,7 @@ async def add_study_time(
     
     if success:
         embed = discord.Embed(
-            title="✅ Study Time Added",
+            title="✅ Study time added",
             description=f"Added **{format_time(minutes)}** to **{subject.name}**",
             color=SUBJECTS[subject.value],
             timestamp=datetime.now()
@@ -112,7 +112,7 @@ async def remove_study_time(
     
     if success:
         embed = discord.Embed(
-            title="✅ Study Time Removed",
+            title="✅ Study time removed",
             description=f"Removed **{format_time(minutes)}** from **{subject.name}**",
             color=SUBJECTS[subject.value],
             timestamp=datetime.now()
@@ -131,7 +131,7 @@ async def check_progress(interaction: discord.Interaction):
     progress = bot.db.get_user_progress(interaction.user.id, str(interaction.user))
     
     embed = discord.Embed(
-        title="📊 Study Dashboard",
+        title="📊 Dashboard",
         description=f"**{interaction.user.display_name}'s** Progress Report",
         color=0x9b59b6,
         timestamp=datetime.now()
@@ -141,7 +141,7 @@ async def check_progress(interaction: discord.Interaction):
     
     if not progress:
         embed.add_field(
-            name="📚 No Data Yet",
+            name="📚 No data yet",
             value="Start studying and use `/add` to track your time!",
             inline=False
         )
@@ -163,7 +163,7 @@ async def check_progress(interaction: discord.Interaction):
                 total_study_time += minutes
     
     embed.add_field(
-        name="📈 Total Study Time",
+        name="📈 Total progress",
         value=f"**{format_time(total_study_time)}** across all subjects",
         inline=False
     )
@@ -180,7 +180,7 @@ async def show_leaderboard(interaction: discord.Interaction):
     leaderboard_data = bot.db.get_leaderboard()
     
     embed = discord.Embed(
-        title="🏆 Study Leaderboard",
+        title="🏆 Leaderboard",
         description="Top students across all subjects",
         color=0xf39c12,
         timestamp=datetime.now()
@@ -188,7 +188,7 @@ async def show_leaderboard(interaction: discord.Interaction):
     
     if not leaderboard_data:
         embed.add_field(
-            name="No Data Yet",
+            name="No data yet",
             value="Be the first to start studying and appear on the leaderboard! 🎯",
             inline=False
         )
@@ -205,17 +205,10 @@ async def show_leaderboard(interaction: discord.Interaction):
             leaderboard_text += f"{prefix} **{username}** - {format_time(total_minutes)}\n"
         
         embed.add_field(
-            name="Top Students",
+            name="Top students",
             value=leaderboard_text,
             inline=False
         )
-    
-    legend = "\n".join([f"• **{subject}**" for subject in SUBJECTS.keys()])
-    embed.add_field(
-        name="📚 Subjects Tracked",
-        value=legend,
-        inline=False
-    )
     
     embed.set_footer(text="Study more to climb the ranks! 📈")
     
@@ -234,7 +227,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             ephemeral=True
         )
     else:
-        # Log unexpected errors
         print(f"❌ Unexpected error: {error}")
         await interaction.response.send_message(
             "❌ An unexpected error occurred. Please try again later.",
