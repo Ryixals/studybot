@@ -115,6 +115,13 @@ async def process_leaderboard_command(channel: discord.TextChannel):
 
     await channel.send("\n".join(lines))
 
+async def process_help(channel: discord.TextChannel):
+    lines = [
+        "**❓ Help**",
+        "Coming soon..."
+    ]
+
+    await channel.send("\n".join(lines))
 
 async def process_recap_messages():
     last_id = bot.db.get_last_processed_message_id()
@@ -170,6 +177,9 @@ async def process_recap_messages():
 
                     elif command == "leaderboard":
                         await process_leaderboard_command(channel)
+
+                    elif command == "help":
+                        await process_help(channel)
 
                     else:
                         await channel.send(f"❌ <@{msg.author.id}> Unknown command. Use `r;add`, `r;remove`, `r;check`, or `r;leaderboard`.")
@@ -291,6 +301,7 @@ async def remove_study_time(interaction: discord.Interaction, subject: app_comma
         embed = discord.Embed(title="✅ Study time removed", description=f"Removed **{format_time(minutes)}** from **{subject.name}**", color=SUBJECTS[subject.value], timestamp=datetime.now())
         embed.set_footer(text=f"Requested by {interaction.user.display_name}")
         embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else None)
+        
         await interaction.response.send_message(embed=embed)
     else:
         await interaction.response.send_message(f"❌ {message}", ephemeral=True)
@@ -300,8 +311,10 @@ async def remove_study_time(interaction: discord.Interaction, subject: app_comma
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.", ephemeral=True)
+
     elif isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+
     else:
         print(f"❌ Unexpected error: {error}")
         await interaction.response.send_message("❌ An unexpected error occurred. Please try again later.", ephemeral=True)
