@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv('DISCORD_TOKEN')
+TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN not found in environment variables")
 
@@ -14,7 +14,10 @@ SUBJECTS = {
     "GP": 0xF5D20A
 }
 
-DATABASE_PATH = os.getenv('DATABASE_PATH', 'tracker.db')
+DATABASE_PATH = os.getenv("DATABASE_PATH", "tracker.db")
 
 COMMAND_COOLDOWN = 1
-MAX_MINUTES_PER_COMMAND = 720
+COMMAND_MAX_MINUTES = 720
+
+RECAP_WINDOW_HOURS = 168
+RECAP_MESSAGES_PER_CHANNEL = 500
