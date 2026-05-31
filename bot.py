@@ -133,7 +133,7 @@ async def check_progress(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📊 Dashboard",
         description=f"**{interaction.user.display_name}'s** Progress Report",
-        color=0x9b59b6,
+        color=0xDCDCDC,
         timestamp=datetime.now()
     )
     
@@ -182,7 +182,7 @@ async def show_leaderboard(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🏆 Leaderboard",
         description="Top students across all subjects",
-        color=0xf39c12,
+        color=0xDCDCDC,
         timestamp=datetime.now()
     )
     
