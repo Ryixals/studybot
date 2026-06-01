@@ -128,7 +128,18 @@ class Database:
             LIMIT ? OFFSET ?
         """, (user_id, limit, offset))
         rows = self.cursor.fetchall()
-        return [{"id": r["id"], "subject": r["subject"], "minutes": r["minutes"], "timestamp": r["timestamp"]} for r in rows]
+        result = []
+        for r in rows:
+            timestamp = r["timestamp"]
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            result.append({
+                "id": r["id"], 
+                "subject": r["subject"], 
+                "minutes": r["minutes"], 
+                "timestamp": timestamp
+            })
+        return result
 
     def count_user_sessions(self, user_id: int) -> int:
         self.cursor.execute("SELECT COUNT(*) as cnt FROM study_sessions WHERE user_id = ?", (user_id,))

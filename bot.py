@@ -118,13 +118,29 @@ async def process_dashboard_command(channel: discord.TextChannel, user: discord.
         embed.add_field(name="📚 No data yet", value="Start studying and use `/add` to track your time!", inline=False)
     else:
         max_minutes = max((minutes for _, minutes in progress), default=0)
-        for subject, minutes in progress:
-            if minutes > 0:
+        
+        items = list(progress)
+        for i in range(0, len(items), 2):
+            field_value = ""
+            subject1, minutes1 = items[i]
+            if minutes1 > 0:
                 bar_length = 20
-                filled = int((minutes / max_minutes) * bar_length) if max_minutes > 0 else 0
+                filled = int((minutes1 / max_minutes) * bar_length) if max_minutes > 0 else 0
                 bar = "█" * filled + "░" * (bar_length - filled)
-                embed.add_field(name=f"**{subject}**", value=f"`{bar}`\n{format_time(minutes)} total", inline=True)
-                total_study_time += minutes
+                field_value += f"**{subject1}**\n`{bar}`\n{format_time(minutes1)} total"
+                total_study_time += minutes1
+            
+            if i + 1 < len(items):
+                subject2, minutes2 = items[i + 1]
+                if minutes2 > 0:
+                    field_value += "\n\n"
+                    bar_length = 20
+                    filled = int((minutes2 / max_minutes) * bar_length) if max_minutes > 0 else 0
+                    bar = "█" * filled + "░" * (bar_length - filled)
+                    field_value += f"**{subject2}**\n`{bar}`\n{format_time(minutes2)} total"
+                    total_study_time += minutes2
+            
+            embed.add_field(name="​", value=field_value, inline=True)
 
     embed.add_field(name="📈 Total progress", value=f"**{format_time(total_study_time)}** across all subjects", inline=False)
     embed.set_footer(text="Keep up the great work! 🎓")
@@ -167,7 +183,7 @@ async def process_timeline_command(channel: discord.TextChannel, user: discord.U
         await channel.send(f"📭 <@{user.id}> No study sessions recorded yet.")
         return
 
-    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{user.display_name}** (Page {page})", color=0x9B59B6, timestamp=datetime.now())
+    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{user.display_name}** (Page {page})", color=0xDCDCDC, timestamp=datetime.now())
     for s in sessions:
         action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
         minutes_abs = abs(s["minutes"])
@@ -177,19 +193,19 @@ async def process_timeline_command(channel: discord.TextChannel, user: discord.U
     await channel.send(embed=embed)
 
 async def process_help_command(channel: discord.TextChannel):
-    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0x1ABC9C, timestamp=datetime.now())
-    embed.add_field(name="**Slash Commands**", value=(
+    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0xDCDCDC, timestamp=datetime.now())
+    embed.add_field(name="**Online Commands**", value=(
         "`/add <subject> <minutes>` – Add study time\n"
         "`/remove <subject> <minutes>` – Remove study time\n"
-        "`/check [period]` – View your progress (today/week/month/year/all)\n"
-        "`/leaderboard [period]` – Global ranking\n"
-        "`/timeline` – Paginated history of your entries\n"
+        "`/dashboard [period]` – View your progress\n"
+        "`/leaderboard [period]` – View the top students\n"
+        "`/timeline` – View your previous study sessions\n"
         "`/help` – This message"
     ), inline=False)
     embed.add_field(name="**Offline Commands**", value=(
         "When the bot is offline, use `r;` prefix:\n"
         "`r;add subject minutes`  `r;remove subject minutes`\n"
-        "`r;check`  `r;leaderboard`  `r;timeline`  `r;help`"
+        "`r;dashboard`  `r;leaderboard`  `r;timeline`  `r;help`"
     ), inline=False)
     embed.add_field(name="**Subjects**", value=", ".join(SUBJECTS.keys()), inline=False)
     embed.set_footer(text="Study hard, stay focused! 🎓")
@@ -224,7 +240,7 @@ async def remove_study_time(interaction: discord.Interaction, subject: app_comma
     else:
         await interaction.response.send_message(f"❌ {message}", ephemeral=True)
 
-@bot.tree.command(name="check", description="Show your studying progress dashboard")
+@bot.tree.command(name="dashboard", description="Show your studying progress dashboard")
 @app_commands.describe(period="Time period to view (default: All Time)")
 @app_commands.choices(period=PERIOD_CHOICES)
 async def show_dashboard(interaction: discord.Interaction, period: app_commands.Choice[str] = None):
@@ -241,7 +257,7 @@ async def show_leaderboard(interaction: discord.Interaction, period: app_command
     await process_leaderboard_command(interaction.channel, period_value)
 
 @bot.tree.command(name="timeline", description="View your recent study sessions (paginated)")
-async def timeline_command(interaction: discord.Interaction):
+async def show_timeline(interaction: discord.Interaction):
     await interaction.response.defer()
     total = bot.db.count_user_sessions(interaction.user.id)
     if total == 0:
@@ -250,7 +266,7 @@ async def timeline_command(interaction: discord.Interaction):
     per_page = 5
     total_pages = (total + per_page - 1) // per_page
     sessions = bot.db.get_user_timeline(interaction.user.id, per_page, 0)
-    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{interaction.user.display_name}** (Page 1)", color=0x9B59B6, timestamp=datetime.now())
+    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{interaction.user.display_name}** (Page 1)", color=0xDCDCDC, timestamp=datetime.now())
     for s in sessions:
         action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
         minutes_abs = abs(s["minutes"])
@@ -286,7 +302,7 @@ async def timeline_command(interaction: discord.Interaction):
         async def update_message(self, interaction: discord.Interaction):
             offset = (self.current_page - 1) * per_page
             sessions = bot.db.get_user_timeline(self.user.id, per_page, offset)
-            embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{self.user.display_name}** (Page {self.current_page})", color=0x9B59B6, timestamp=datetime.now())
+            embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{self.user.display_name}** (Page {self.current_page})", color=0xDCDCDC, timestamp=datetime.now())
             for s in sessions:
                 action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
                 minutes_abs = abs(s["minutes"])
@@ -301,11 +317,11 @@ async def timeline_command(interaction: discord.Interaction):
 
 @bot.tree.command(name="help", description="Show all commands and how to use the bot")
 async def help_command(interaction: discord.Interaction):
-    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0x1ABC9C, timestamp=datetime.now())
+    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0xDCDCDC, timestamp=datetime.now())
     embed.add_field(name="**Slash Commands**", value=(
         "`/add <subject> <minutes>` – Add study time\n"
         "`/remove <subject> <minutes>` – Remove study time\n"
-        "`/check [period]` – View your progress (today/week/month/year/all)\n"
+        "`/dashboard [period]` – View your progress (today/week/month/year/all)\n"
         "`/leaderboard [period]` – Global ranking\n"
         "`/timeline` – Paginated history of your entries\n"
         "`/help` – This message"
@@ -313,7 +329,7 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="**Offline Commands**", value=(
         "When the bot is offline, use `r;` prefix:\n"
         "`r;add subject minutes`  `r;remove subject minutes`\n"
-        "`r;check`  `r;leaderboard`  `r;timeline`  `r;help`"
+        "`r;dashboard`  `r;leaderboard`  `r;timeline`  `r;help`"
     ), inline=False)
     embed.add_field(name="**Subjects**", value=", ".join(SUBJECTS.keys()), inline=False)
     embed.set_footer(text="Study hard, stay focused! 🎓")
@@ -383,7 +399,7 @@ async def process_recap_messages():
                     elif command == "help":
                         await process_help_command(channel)
                     else:
-                        await channel.send(f"❌ <@{msg.author.id}> Unknown command. Use `r;add`, `r;remove`, `r;check`, `r;leaderboard`, `r;timeline`, or `r;help`.")
+                        await channel.send(f"❌ <@{msg.author.id}> Unknown command. Use `r;add`, `r;remove`, `r;dashboard`, `r;leaderboard`, `r;timeline`, or `r;help`.")
             except Exception as e:
                 print(f"Error processing channel {channel.name} in guild {guild.name}: {e}")
 
@@ -395,12 +411,21 @@ async def process_recap_messages():
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.", ephemeral=True)
     elif isinstance(error, app_commands.MissingPermissions):
-        await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ You don't have permission to use this command.", ephemeral=True)
     else:
         print(f"❌ Unexpected error: {error}")
-        await interaction.response.send_message("❌ An unexpected error occurred. Please try again later.", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ An unexpected error occurred. Please try again later.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ An unexpected error occurred. Please try again later.", ephemeral=True)
 
 
 if __name__ == "__main__":
