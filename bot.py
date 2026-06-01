@@ -28,25 +28,23 @@ class StudyBot(commands.Bot):
 
 bot = StudyBot()
 
-
 SUBJECT_CHOICES = [
     app_commands.Choice(name=subject, value=subject)
     for subject in SUBJECTS.keys()
 ]
 
-
-@bot.event
-async def on_ready():
-    print(f"✅ {bot.user} has connected to Discord!")
-    print(f"📊 Bot is in {len(bot.guilds)} guild(s)")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Your study progress 📚"))
-    await process_recap_messages()
+PERIOD_CHOICES = [
+    app_commands.Choice(name="Today", value="today"),
+    app_commands.Choice(name="This Week", value="week"),
+    app_commands.Choice(name="This Month", value="month"),
+    app_commands.Choice(name="This Year", value="year"),
+    app_commands.Choice(name="All Time", value="all"),
+]
 
 
 def format_time(minutes: int) -> str:
     hours = minutes // 60
     mins = minutes % 60
-
     if hours > 0 and mins > 0:
         return f"{hours} hour(s) {mins} minute(s)"
     elif hours > 0:
@@ -73,55 +71,261 @@ async def process_add_command(channel: discord.TextChannel, user: discord.User, 
     success, message = bot.db.add_study_time(user.id, str(user), subject_value, minutes)
 
     if success:
-        await channel.send(f"✅ <@{user.id}> Added **{format_time(minutes)}** to **{subject_value}**")
+        embed = discord.Embed(title="✅ Study time added", description=f"Added **{format_time(minutes)}** to **{subject_value}**", color=SUBJECTS[subject_value], timestamp=datetime.now())
+        embed.set_footer(text=f"Requested by {user.display_name}")
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await channel.send(embed=embed)
     else:
         await channel.send(f"❌ <@{user.id}> {message}")
 
+async def process_remove_command(channel: discord.TextChannel, user: discord.User, subject_name: str, minutes: int):
+    if minutes > COMMAND_MAX_MINUTES:
+        await channel.send(f"❌ <@{user.id}> Cannot remove more than {COMMAND_MAX_MINUTES} minutes at once.")
+        return
 
-async def process_check_command(channel: discord.TextChannel, user: discord.User):
-    progress = bot.db.get_user_progress(user.id, str(user))
+    subject_value = None
+    for name in SUBJECTS.keys():
+        if name.lower() == subject_name.lower():
+            subject_value = name
+            break
+
+    if not subject_value:
+        await channel.send(f"❌ <@{user.id}> Invalid subject. Available: {', '.join(SUBJECTS.keys())}")
+        return
+
+    success, message = bot.db.remove_study_time(user.id, subject_value, minutes)
+
+    if success:
+        embed = discord.Embed(title="✅ Study time removed", description=f"Removed **{format_time(minutes)}** from **{subject_value}**", color=SUBJECTS[subject_value], timestamp=datetime.now())
+        embed.set_footer(text=f"Requested by {user.display_name}")
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await channel.send(embed=embed)
+    else:
+        await channel.send(f"❌ <@{user.id}> {message}")
+
+async def process_dashboard_command(channel: discord.TextChannel, user: discord.User, period: str = "all"):
+    if period == "all":
+        progress = bot.db.get_user_progress(user.id, str(user))
+    else:
+        progress = bot.db.get_user_progress_by_period(user.id, str(user), period)
+
+    embed = discord.Embed(title="📊 Dashboard", description=f"**{user.display_name}'s** Progress Report ({period.replace('_', ' ').title()})", color=0xDCDCDC, timestamp=datetime.now())
     total_study_time = 0
 
     if not progress:
-        await channel.send(f"📊 <@{user.id}> No study data yet. Use `r;add` to start tracking!")
+        embed.add_field(name="📚 No data yet", value="Start studying and use `/add` to track your time!", inline=False)
+    else:
+        max_minutes = max((minutes for _, minutes in progress), default=0)
+        for subject, minutes in progress:
+            if minutes > 0:
+                bar_length = 20
+                filled = int((minutes / max_minutes) * bar_length) if max_minutes > 0 else 0
+                bar = "█" * filled + "░" * (bar_length - filled)
+                embed.add_field(name=f"**{subject}**", value=f"`{bar}`\n{format_time(minutes)} total", inline=True)
+                total_study_time += minutes
+
+    embed.add_field(name="📈 Total progress", value=f"**{format_time(total_study_time)}** across all subjects", inline=False)
+    embed.set_footer(text="Keep up the great work! 🎓")
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+
+    await channel.send(embed=embed)
+
+async def process_leaderboard_command(channel: discord.TextChannel, period: str = "all"):
+    if period == "all":
+        leaderboard_data = bot.db.get_leaderboard()
+    else:
+        leaderboard_data = bot.db.get_leaderboard_by_period(period)
+
+    embed = discord.Embed(title="🏆 Leaderboard", description=f"Top students ({period.replace('_', ' ').title()})", color=0xDCDCDC, timestamp=datetime.now())
+
+    if not leaderboard_data:
+        embed.add_field(name="No data yet", value="Be the first to start studying and appear on the leaderboard! 🎯", inline=False)
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        leaderboard_text = ""
+        for i, (username, total_minutes) in enumerate(leaderboard_data):
+            if i < 3:
+                prefix = medals[i]
+            else:
+                prefix = f"**{i+1}.**"
+            leaderboard_text += f"{prefix} **{username}** - {format_time(total_minutes)}\n"
+        embed.add_field(name="Top students", value=leaderboard_text, inline=False)
+
+    embed.set_footer(text="Study more to climb the ranks! 📈")
+    await channel.send(embed=embed)
+
+async def process_timeline_command(channel: discord.TextChannel, user: discord.User, page: int = 1):
+    per_page = 5
+    offset = (page - 1) * per_page
+    total = bot.db.count_user_sessions(user.id)
+    sessions = bot.db.get_user_timeline(user.id, per_page, offset)
+
+    if not sessions:
+        await channel.send(f"📭 <@{user.id}> No study sessions recorded yet.")
         return
 
-    lines = [f"**{user.display_name}'s Progress**"]
-    for subject, minutes in progress:
-        if minutes > 0:
-            lines.append(f"• {subject}: {format_time(minutes)}")
-            total_study_time += minutes
+    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{user.display_name}** (Page {page})", color=0x9B59B6, timestamp=datetime.now())
+    for s in sessions:
+        action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
+        minutes_abs = abs(s["minutes"])
+        time_str = s["timestamp"].strftime("%Y-%m-%d %H:%M")
+        embed.add_field(name=f"{action} **{s['subject']}**", value=f"`{format_time(minutes_abs)}` at {time_str}", inline=False)
+    embed.set_footer(text=f"Showing {offset+1}-{min(offset+per_page, total)} of {total} entries")
+    await channel.send(embed=embed)
 
-    lines.append(f"\n**Total:** {format_time(total_study_time)}")
-    await channel.send("\n".join(lines))
+async def process_help_command(channel: discord.TextChannel):
+    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0x1ABC9C, timestamp=datetime.now())
+    embed.add_field(name="**Slash Commands**", value=(
+        "`/add <subject> <minutes>` – Add study time\n"
+        "`/remove <subject> <minutes>` – Remove study time\n"
+        "`/check [period]` – View your progress (today/week/month/year/all)\n"
+        "`/leaderboard [period]` – Global ranking\n"
+        "`/timeline` – Paginated history of your entries\n"
+        "`/help` – This message"
+    ), inline=False)
+    embed.add_field(name="**Offline Commands**", value=(
+        "When the bot is offline, use `r;` prefix:\n"
+        "`r;add subject minutes`  `r;remove subject minutes`\n"
+        "`r;check`  `r;leaderboard`  `r;timeline`  `r;help`"
+    ), inline=False)
+    embed.add_field(name="**Subjects**", value=", ".join(SUBJECTS.keys()), inline=False)
+    embed.set_footer(text="Study hard, stay focused! 🎓")
+    await channel.send(embed=embed)
 
 
-async def process_leaderboard_command(channel: discord.TextChannel):
-    leaderboard = bot.db.get_leaderboard()
+@bot.tree.command(name="add", description="Add studying time to a subject")
+@app_commands.describe(subject="Select the subject you studied", minutes="How many minutes to add (required)")
+@app_commands.choices(subject=SUBJECT_CHOICES)
+async def add_study_time(interaction: discord.Interaction, subject: app_commands.Choice[str], minutes: app_commands.Range[int, 1, COMMAND_MAX_MINUTES]):
+    success, message = bot.db.add_study_time(interaction.user.id, str(interaction.user), subject.value, minutes)
+    if success:
+        embed = discord.Embed(title="✅ Study time added", description=f"Added **{format_time(minutes)}** to **{subject.name}**", color=SUBJECTS[subject.value], timestamp=datetime.now())
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        if interaction.user.avatar:
+            embed.set_thumbnail(url=interaction.user.avatar.url)
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
 
-    if not leaderboard:
-        await channel.send("🏆 No data yet. Be the first to study!")
+@bot.tree.command(name="remove", description="Remove studying time from a subject")
+@app_commands.describe(subject="Select the subject", minutes="How many minutes to remove (required)")
+@app_commands.choices(subject=SUBJECT_CHOICES)
+async def remove_study_time(interaction: discord.Interaction, subject: app_commands.Choice[str], minutes: app_commands.Range[int, 1, COMMAND_MAX_MINUTES]):
+    success, message = bot.db.remove_study_time(interaction.user.id, subject.value, minutes)
+    if success:
+        embed = discord.Embed(title="✅ Study time removed", description=f"Removed **{format_time(minutes)}** from **{subject.name}**", color=SUBJECTS[subject.value], timestamp=datetime.now())
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        if interaction.user.avatar:
+            embed.set_thumbnail(url=interaction.user.avatar.url)
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
+
+@bot.tree.command(name="check", description="Show your studying progress dashboard")
+@app_commands.describe(period="Time period to view (default: All Time)")
+@app_commands.choices(period=PERIOD_CHOICES)
+async def show_dashboard(interaction: discord.Interaction, period: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+    period_value = period.value if period else "all"
+    await process_dashboard_command(interaction.channel, interaction.user, period_value)
+
+@bot.tree.command(name="leaderboard", description="Show the global study leaderboard")
+@app_commands.describe(period="Time period to view (default: All Time)")
+@app_commands.choices(period=PERIOD_CHOICES)
+async def show_leaderboard(interaction: discord.Interaction, period: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+    period_value = period.value if period else "all"
+    await process_leaderboard_command(interaction.channel, period_value)
+
+@bot.tree.command(name="timeline", description="View your recent study sessions (paginated)")
+async def timeline_command(interaction: discord.Interaction):
+    await interaction.response.defer()
+    total = bot.db.count_user_sessions(interaction.user.id)
+    if total == 0:
+        await interaction.followup.send("📭 You have no study sessions recorded yet.")
         return
+    per_page = 5
+    total_pages = (total + per_page - 1) // per_page
+    sessions = bot.db.get_user_timeline(interaction.user.id, per_page, 0)
+    embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{interaction.user.display_name}** (Page 1)", color=0x9B59B6, timestamp=datetime.now())
+    for s in sessions:
+        action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
+        minutes_abs = abs(s["minutes"])
+        time_str = s["timestamp"].strftime("%Y-%m-%d %H:%M")
+        embed.add_field(name=f"{action} **{s['subject']}**", value=f"`{format_time(minutes_abs)}` at {time_str}", inline=False)
+    embed.set_footer(text=f"Showing 1-{min(per_page, total)} of {total} entries")
 
-    medals = ["🥇", "🥈", "🥉"]
-    lines = ["**🏆 Leaderboard**"]
+    class TimelineView(discord.ui.View):
+        def __init__(self, user: discord.User, current_page: int, total_pages: int):
+            super().__init__(timeout=60)
+            self.user = user
+            self.current_page = current_page
+            self.total_pages = total_pages
 
-    for i, (username, total_minutes) in enumerate(leaderboard):
-        if i < 3:
-            prefix = medals[i]
-        else:
-            prefix = f"{i+1}."
-        lines.append(f"{prefix} **{username}** - {format_time(total_minutes)}")
+        @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary)
+        async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != self.user.id:
+                await interaction.response.send_message("This timeline belongs to someone else.", ephemeral=True)
+                return
+            if self.current_page > 1:
+                self.current_page -= 1
+                await self.update_message(interaction)
 
-    await channel.send("\n".join(lines))
+        @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary)
+        async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != self.user.id:
+                await interaction.response.send_message("This timeline belongs to someone else.", ephemeral=True)
+                return
+            if self.current_page < self.total_pages:
+                self.current_page += 1
+                await self.update_message(interaction)
 
-async def process_help(channel: discord.TextChannel):
-    lines = [
-        "**❓ Help**",
-        "Coming soon..."
-    ]
+        async def update_message(self, interaction: discord.Interaction):
+            offset = (self.current_page - 1) * per_page
+            sessions = bot.db.get_user_timeline(self.user.id, per_page, offset)
+            embed = discord.Embed(title="📜 Study Timeline", description=f"Recent activity for **{self.user.display_name}** (Page {self.current_page})", color=0x9B59B6, timestamp=datetime.now())
+            for s in sessions:
+                action = "➕ Added" if s["minutes"] > 0 else "➖ Removed"
+                minutes_abs = abs(s["minutes"])
+                time_str = s["timestamp"].strftime("%Y-%m-%d %H:%M")
+                embed.add_field(name=f"{action} **{s['subject']}**", value=f"`{format_time(minutes_abs)}` at {time_str}", inline=False)
+            total = bot.db.count_user_sessions(self.user.id)
+            embed.set_footer(text=f"Showing {offset+1}-{min(offset+per_page, total)} of {total} entries")
+            await interaction.response.edit_message(embed=embed, view=self)
 
-    await channel.send("\n".join(lines))
+    view = TimelineView(interaction.user, 1, total_pages)
+    await interaction.followup.send(embed=embed, view=view)
+
+@bot.tree.command(name="help", description="Show all commands and how to use the bot")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="📚 Study Bot Help", description="Track your study time across subjects and compete with friends!", color=0x1ABC9C, timestamp=datetime.now())
+    embed.add_field(name="**Slash Commands**", value=(
+        "`/add <subject> <minutes>` – Add study time\n"
+        "`/remove <subject> <minutes>` – Remove study time\n"
+        "`/check [period]` – View your progress (today/week/month/year/all)\n"
+        "`/leaderboard [period]` – Global ranking\n"
+        "`/timeline` – Paginated history of your entries\n"
+        "`/help` – This message"
+    ), inline=False)
+    embed.add_field(name="**Offline Commands**", value=(
+        "When the bot is offline, use `r;` prefix:\n"
+        "`r;add subject minutes`  `r;remove subject minutes`\n"
+        "`r;check`  `r;leaderboard`  `r;timeline`  `r;help`"
+    ), inline=False)
+    embed.add_field(name="**Subjects**", value=", ".join(SUBJECTS.keys()), inline=False)
+    embed.set_footer(text="Study hard, stay focused! 🎓")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.event
+async def on_ready():
+    print(f"✅ {bot.user} has connected to Discord!")
+    print(f"📊 Bot is in {len(bot.guilds)} guild(s)")
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Your study progress 📚"))
+    await process_recap_messages()
 
 async def process_recap_messages():
     last_id = bot.db.get_last_processed_message_id()
@@ -163,7 +367,6 @@ async def process_recap_messages():
                             await process_add_command(channel, msg.author, subject_name, minutes)
                         except ValueError:
                             await channel.send(f"❌ <@{msg.author.id}> Invalid minutes value.")
-
                     elif command == "remove" and len(parts) >= 3:
                         subject_name = parts[1]
                         try:
@@ -171,19 +374,16 @@ async def process_recap_messages():
                             await process_remove_command(channel, msg.author, subject_name, minutes)
                         except ValueError:
                             await channel.send(f"❌ <@{msg.author.id}> Invalid minutes value.")
-
-                    elif command == "check":
-                        await process_check_command(channel, msg.author)
-
+                    elif command == "dashboard":
+                        await process_dashboard_command(channel, msg.author, "all")
                     elif command == "leaderboard":
-                        await process_leaderboard_command(channel)
-
+                        await process_leaderboard_command(channel, "all")
+                    elif command == "timeline":
+                        await process_timeline_command(channel, msg.author, 1)
                     elif command == "help":
-                        await process_help(channel)
-
+                        await process_help_command(channel)
                     else:
-                        await channel.send(f"❌ <@{msg.author.id}> Unknown command. Use `r;add`, `r;remove`, `r;check`, or `r;leaderboard`.")
-
+                        await channel.send(f"❌ <@{msg.author.id}> Unknown command. Use `r;add`, `r;remove`, `r;check`, `r;leaderboard`, `r;timeline`, or `r;help`.")
             except Exception as e:
                 print(f"Error processing channel {channel.name} in guild {guild.name}: {e}")
 
@@ -192,129 +392,12 @@ async def process_recap_messages():
         print(f"📥 Recap processed messages up to ID {new_last_id}")
 
 
-async def process_remove_command(channel: discord.TextChannel, user: discord.User, subject_name: str, minutes: int):
-    if minutes > COMMAND_MAX_MINUTES:
-        await channel.send(f"❌ <@{user.id}> Cannot remove more than {COMMAND_MAX_MINUTES} minutes at once.")
-        return
-
-    subject_value = None
-    for name in SUBJECTS.keys():
-        if name.lower() == subject_name.lower():
-            subject_value = name
-            break
-
-    if not subject_value:
-        await channel.send(f"❌ <@{user.id}> Invalid subject. Available: {', '.join(SUBJECTS.keys())}")
-        return
-
-    success, message = bot.db.remove_study_time(user.id, subject_value, minutes)
-
-    if success:
-        await channel.send(f"✅ <@{user.id}> Removed **{format_time(minutes)}** from **{subject_value}**")
-    else:
-        await channel.send(f"❌ <@{user.id}> {message}")
-
-
-@bot.tree.command(name="add", description="Add studying time to a subject")
-@app_commands.describe(subject="Select the subject you studied", minutes="How many minutes to add (required)")
-@app_commands.choices(subject=SUBJECT_CHOICES)
-async def add_study_time(interaction: discord.Interaction, subject: app_commands.Choice[str], minutes: app_commands.Range[int, 1, COMMAND_MAX_MINUTES]):
-    if minutes > COMMAND_MAX_MINUTES:
-        await interaction.response.send_message(f"❌ Cannot add more than {COMMAND_MAX_MINUTES} minutes ({COMMAND_MAX_MINUTES//60} hours) at once.", ephemeral=True)
-        return
-
-    success, message = bot.db.add_study_time(interaction.user.id, str(interaction.user), subject.value, minutes)
-
-    if success:
-        embed = discord.Embed(title="✅ Study time added", description=f"Added **{format_time(minutes)}** to **{subject.name}**", color=SUBJECTS[subject.value], timestamp=datetime.now())
-        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
-        embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else None)
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
-
-
-@bot.tree.command(name="check", description="Show your studying progress dashboard")
-async def check_progress(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    progress = bot.db.get_user_progress(interaction.user.id, str(interaction.user))
-
-    embed = discord.Embed(title="📊 Dashboard", description=f"**{interaction.user.display_name}'s** Progress Report", color=0xDCDCDC, timestamp=datetime.now())
-    total_study_time = 0
-
-    if not progress:
-        embed.add_field(name="📚 No data yet", value="Start studying and use `/add` to track your time!", inline=False)
-    else:
-        max_minutes = max((minutes for _, minutes in progress), default=0)
-
-        for subject, minutes in progress:
-            if minutes > 0:
-                bar_length = 20
-                filled = int((minutes / max_minutes) * bar_length) if max_minutes > 0 else 0
-                bar = "█" * filled + "░" * (bar_length - filled)
-                embed.add_field(name=f"**{subject}**", value=f"`{bar}`\n{format_time(minutes)} total", inline=True)
-                total_study_time += minutes
-
-    embed.add_field(name="📈 Total progress", value=f"**{format_time(total_study_time)}** across all subjects", inline=False)
-    embed.set_footer(text="Keep up the great work! 🎓")
-    embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else None)
-
-    await interaction.followup.send(embed=embed)
-
-
-@bot.tree.command(name="leaderboard", description="Show the global study leaderboard")
-async def show_leaderboard(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    leaderboard_data = bot.db.get_leaderboard()
-
-    embed = discord.Embed(title="🏆 Leaderboard", description="Top students across all subjects", color=0xDCDCDC, timestamp=datetime.now())
-
-    if not leaderboard_data:
-        embed.add_field(name="No data yet", value="Be the first to start studying and appear on the leaderboard! 🎯", inline=False)
-    else:
-        medals = ["🥇", "🥈", "🥉"]
-        leaderboard_text = ""
-
-        for i, (username, total_minutes) in enumerate(leaderboard_data):
-            if i < 3:
-                prefix = medals[i]
-            else:
-                prefix = f"**{i+1}.**"
-            leaderboard_text += f"{prefix} **{username}** - {format_time(total_minutes)}\n"
-
-        embed.add_field(name="Top students", value=leaderboard_text, inline=False)
-
-    embed.set_footer(text="Study more to climb the ranks! 📈")
-
-    await interaction.followup.send(embed=embed)
-
-
-@bot.tree.command(name="remove", description="Remove studying time from a subject")
-@app_commands.describe(subject="Select the subject", minutes="How many minutes to remove (required)")
-@app_commands.choices(subject=SUBJECT_CHOICES)
-async def remove_study_time(interaction: discord.Interaction, subject: app_commands.Choice[str], minutes: app_commands.Range[int, 1, COMMAND_MAX_MINUTES]):
-    success, message = bot.db.remove_study_time(interaction.user.id, subject.value, minutes)
-
-    if success:
-        embed = discord.Embed(title="✅ Study time removed", description=f"Removed **{format_time(minutes)}** from **{subject.name}**", color=SUBJECTS[subject.value], timestamp=datetime.now())
-        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
-        embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else None)
-        
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(f"❌ {message}", ephemeral=True)
-
-
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(f"⏰ Command on cooldown. Try again in {error.retry_after:.1f} seconds.", ephemeral=True)
-
     elif isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("❌ You don't have permission to use this command.", ephemeral=True)
-
     else:
         print(f"❌ Unexpected error: {error}")
         await interaction.response.send_message("❌ An unexpected error occurred. Please try again later.", ephemeral=True)

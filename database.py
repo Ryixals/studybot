@@ -1,6 +1,6 @@
 # database.py
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Tuple
 from config import DATABASE_PATH, SUBJECTS
 
@@ -10,6 +10,12 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
         self.create_tables()
+        
+    def create_tables(self):
+        self.cursor.execute("CREATE TABLE IF NOT EXISTS study_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT NOT NULL, subject TEXT NOT NULL, minutes INTEGER NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+        self.cursor.execute("CREATE TABLE IF NOT EXISTS total_study_time (user_id INTEGER NOT NULL, username TEXT NOT NULL, subject TEXT NOT NULL, total_minutes INTEGER DEFAULT 0, PRIMARY KEY (user_id, subject))")
+        self.cursor.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value INTEGER)")
+        self.conn.commit()
 
     def add_study_time(self, user_id: int, username: str, subject: str, minutes: int) -> Tuple[bool, str]:
         if subject not in SUBJECTS:
@@ -24,33 +30,6 @@ class Database:
         except Exception as e:
             self.conn.rollback()
             return False, f"Database error: {str(e)}"
-
-    def close(self):
-        if self.conn:
-            self.conn.close()
-
-    def create_tables(self):
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS study_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, username TEXT NOT NULL, subject TEXT NOT NULL, minutes INTEGER NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS total_study_time (user_id INTEGER NOT NULL, username TEXT NOT NULL, subject TEXT NOT NULL, total_minutes INTEGER DEFAULT 0, PRIMARY KEY (user_id, subject))")
-        self.conn.commit()
-
-    def get_leaderboard(self, limit: int = 10) -> List[Tuple[str, int]]:
-        self.cursor.execute("SELECT username, SUM(total_minutes) as total_time FROM total_study_time GROUP BY user_id, username HAVING total_time > 0 ORDER BY total_time DESC LIMIT ?", (limit,))
-        return [(row["username"], row["total_time"]) for row in self.cursor.fetchall()]
-
-    def get_last_processed_message_id(self) -> int:
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value INTEGER)")
-        self.cursor.execute("SELECT value FROM bot_state WHERE key = ?", ("last_processed_message_id",))
-        row = self.cursor.fetchone()
-        return row["value"] if row else 0
-
-    def get_user_progress(self, user_id: int, username: str) -> List[Tuple[str, int]]:
-        self.cursor.execute("SELECT subject, total_minutes FROM total_study_time WHERE user_id = ? ORDER BY total_minutes DESC", (user_id,))
-        results = self.cursor.fetchall()
-        if not results:
-            self._ensure_user_exists(user_id, username)
-            results = []
-        return [(row["subject"], row["total_minutes"]) for row in results]
 
     def remove_study_time(self, user_id: int, subject: str, minutes: int) -> Tuple[bool, str]:
         if subject not in SUBJECTS:
@@ -71,6 +50,24 @@ class Database:
             self.conn.rollback()
             return False, f"Database error: {str(e)}"
 
+    def get_user_progress(self, user_id: int, username: str) -> List[Tuple[str, int]]:
+        self.cursor.execute("SELECT subject, total_minutes FROM total_study_time WHERE user_id = ? ORDER BY total_minutes DESC", (user_id,))
+        results = self.cursor.fetchall()
+        if not results:
+            self._ensure_user_exists(user_id, username)
+            results = []
+        return [(row["subject"], row["total_minutes"]) for row in results]
+
+    def get_leaderboard(self, limit: int = 10) -> List[Tuple[str, int]]:
+        self.cursor.execute("SELECT username, SUM(total_minutes) as total_time FROM total_study_time GROUP BY user_id, username HAVING total_time > 0 ORDER BY total_time DESC LIMIT ?", (limit,))
+        return [(row["username"], row["total_time"]) for row in self.cursor.fetchall()]
+
+    def get_last_processed_message_id(self) -> int:
+        self.cursor.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value INTEGER)")
+        self.cursor.execute("SELECT value FROM bot_state WHERE key = ?", ("last_processed_message_id",))
+        row = self.cursor.fetchone()
+        return row["value"] if row else 0
+
     def set_last_processed_message_id(self, message_id: int):
         self.cursor.execute("INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ("last_processed_message_id", message_id))
         self.conn.commit()
@@ -89,3 +86,63 @@ class Database:
             return f"{hours}h"
         else:
             return f"{mins}m"
+
+    def get_user_progress_by_period(self, user_id: int, username: str, period: str) -> List[Tuple[str, int]]:
+        if period == "all":
+            return self.get_user_progress(user_id, username)
+        start_date = self._get_start_date(period)
+        self.cursor.execute("""
+            SELECT subject, SUM(minutes) as total
+            FROM study_sessions
+            WHERE user_id = ? AND timestamp >= ?
+            GROUP BY subject
+            ORDER BY total DESC
+        """, (user_id, start_date))
+        rows = self.cursor.fetchall()
+        result = {subject: 0 for subject in SUBJECTS}
+        for row in rows:
+            result[row["subject"]] = row["total"]
+        return [(subj, mins) for subj, mins in result.items() if mins != 0]
+
+    def get_leaderboard_by_period(self, period: str, limit: int = 10) -> List[Tuple[str, int]]:
+        if period == "all":
+            return self.get_leaderboard(limit)
+        start_date = self._get_start_date(period)
+        self.cursor.execute("""
+            SELECT username, SUM(minutes) as total_time
+            FROM study_sessions
+            WHERE timestamp >= ?
+            GROUP BY user_id, username
+            HAVING total_time > 0
+            ORDER BY total_time DESC
+            LIMIT ?
+        """, (start_date, limit))
+        return [(row["username"], row["total_time"]) for row in self.cursor.fetchall()]
+
+    def get_user_timeline(self, user_id: int, limit: int = 5, offset: int = 0) -> List[dict]:
+        self.cursor.execute("""
+            SELECT id, subject, minutes, timestamp
+            FROM study_sessions
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+        """, (user_id, limit, offset))
+        rows = self.cursor.fetchall()
+        return [{"id": r["id"], "subject": r["subject"], "minutes": r["minutes"], "timestamp": r["timestamp"]} for r in rows]
+
+    def count_user_sessions(self, user_id: int) -> int:
+        self.cursor.execute("SELECT COUNT(*) as cnt FROM study_sessions WHERE user_id = ?", (user_id,))
+        return self.cursor.fetchone()["cnt"]
+
+    def _get_start_date(self, period: str) -> datetime:
+        now = datetime.now()
+        if period == "today":
+            return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            return now - timedelta(days=7)
+        elif period == "month":
+            return now - timedelta(days=30)
+        elif period == "year":
+            return now - timedelta(days=365)
+        else:
+            return datetime.min
