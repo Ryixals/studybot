@@ -246,7 +246,49 @@ async def remove_study_time(interaction: discord.Interaction, subject: app_comma
 async def show_dashboard(interaction: discord.Interaction, period: app_commands.Choice[str] = None):
     await interaction.response.defer()
     period_value = period.value if period else "all"
-    await process_dashboard_command(interaction.channel, interaction.user, period_value)
+    
+    if period_value == "all":
+        progress = bot.db.get_user_progress(interaction.user.id, str(interaction.user))
+    else:
+        progress = bot.db.get_user_progress_by_period(interaction.user.id, str(interaction.user), period_value)
+
+    embed = discord.Embed(title="📊 Dashboard", description=f"**{interaction.user.display_name}'s** Progress Report ({period_value.replace('_', ' ').title()})", color=0xDCDCDC, timestamp=datetime.now())
+    total_study_time = 0
+
+    if not progress:
+        embed.add_field(name="📚 No data yet", value="Start studying and use `/add` to track your time!", inline=False)
+    else:
+        max_minutes = max((minutes for _, minutes in progress), default=0)
+        
+        items = list(progress)
+        for i in range(0, len(items), 2):
+            field_value = ""
+            subject1, minutes1 = items[i]
+            if minutes1 > 0:
+                bar_length = 20
+                filled = int((minutes1 / max_minutes) * bar_length) if max_minutes > 0 else 0
+                bar = "█" * filled + "░" * (bar_length - filled)
+                field_value += f"**{subject1}**\n`{bar}`\n{format_time(minutes1)} total"
+                total_study_time += minutes1
+            
+            if i + 1 < len(items):
+                subject2, minutes2 = items[i + 1]
+                if minutes2 > 0:
+                    field_value += "\n\n"
+                    bar_length = 20
+                    filled = int((minutes2 / max_minutes) * bar_length) if max_minutes > 0 else 0
+                    bar = "█" * filled + "░" * (bar_length - filled)
+                    field_value += f"**{subject2}**\n`{bar}`\n{format_time(minutes2)} total"
+                    total_study_time += minutes2
+            
+            embed.add_field(name="​", value=field_value, inline=True)
+
+    embed.add_field(name="📈 Total progress", value=f"**{format_time(total_study_time)}** across all subjects", inline=False)
+    embed.set_footer(text="Keep up the great work! 🎓")
+    if interaction.user.avatar:
+        embed.set_thumbnail(url=interaction.user.avatar.url)
+
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="leaderboard", description="Show the global study leaderboard")
 @app_commands.describe(period="Time period to view (default: All Time)")
@@ -254,7 +296,30 @@ async def show_dashboard(interaction: discord.Interaction, period: app_commands.
 async def show_leaderboard(interaction: discord.Interaction, period: app_commands.Choice[str] = None):
     await interaction.response.defer()
     period_value = period.value if period else "all"
-    await process_leaderboard_command(interaction.channel, period_value)
+    
+    if period_value == "all":
+        leaderboard_data = bot.db.get_leaderboard()
+    else:
+        leaderboard_data = bot.db.get_leaderboard_by_period(period_value)
+
+    embed = discord.Embed(title="🏆 Leaderboard", description=f"Top students ({period_value.replace('_', ' ').title()})", color=0xDCDCDC, timestamp=datetime.now())
+
+    if not leaderboard_data:
+        embed.add_field(name="No data yet", value="Be the first to start studying and appear on the leaderboard! 🎯", inline=False)
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        leaderboard_text = ""
+        for i, (username, total_minutes) in enumerate(leaderboard_data):
+            if i < 3:
+                prefix = medals[i]
+            else:
+                prefix = f"**{i+1}.**"
+            leaderboard_text += f"{prefix} **{username}** - {format_time(total_minutes)}\n"
+        embed.add_field(name="Top students", value=leaderboard_text, inline=False)
+
+    embed.set_footer(text="Study more to climb the ranks! 📈")
+    
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="timeline", description="View your recent study sessions (paginated)")
 async def show_timeline(interaction: discord.Interaction):
